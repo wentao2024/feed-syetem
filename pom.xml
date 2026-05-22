@@ -11,6 +11,8 @@
     <packaging>pom</packaging>
     <name>Feed System - Parent</name>
 
+
+
     <modules>
         <module>common</module>
         <module>eureka-server</module>
