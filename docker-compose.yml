@@ -1,0 +1,184 @@
+version: '3.8'
+
+# ── Phase 1: Local development (no AWS) ──────────────────────────────────────
+# Run: docker-compose up -d
+# Stop: docker-compose down
+# Reset everything: docker-compose down -v
+
+services:
+
+  # ─── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres-user:
+    image: postgres:15-alpine
+    container_name: feed-postgres-user
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_user_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d user_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-post:
+    image: postgres:15-alpine
+    container_name: feed-postgres-post
+    environment:
+      POSTGRES_DB: post_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_post_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d post_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: feed-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: feed-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP (used by services)
+      - "15672:15672"  # Management UI → http://localhost:15672  guest/guest
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+
+  # ─── Microservices ────────────────────────────────────────────────────────────
+
+  eureka-server:
+    build:
+      context: .
+      dockerfile: eureka-server/Dockerfile
+    container_name: feed-eureka
+    ports:
+      - "8761:8761"
+
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: feed-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      EUREKA_HOST: eureka-server
+      JWT_SECRET: feed-system-secret-key-must-be-at-least-256-bits-long-for-hs256
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    container_name: feed-user-service
+    ports:
+      - "8081:8081"
+    environment:
+      EUREKA_HOST: eureka-server
+      DB_HOST: postgres-user
+      DB_PORT: 5432
+      DB_NAME: user_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET: feed-system-secret-key-must-be-at-least-256-bits-long-for-hs256
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      postgres-user:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  post-service:
+    build:
+      context: .
+      dockerfile: post-service/Dockerfile
+    container_name: feed-post-service
+    ports:
+      - "8082:8082"
+    environment:
+      EUREKA_HOST: eureka-server
+      DB_HOST: postgres-post
+      DB_PORT: 5432
+      DB_NAME: post_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      UPLOAD_DIR: /app/uploads
+      STORAGE_BASE_URL: http://localhost:8082/files
+    volumes:
+      - post_uploads:/app/uploads   # persist uploaded images
+    depends_on:
+      postgres-post:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  feed-service:
+    build:
+      context: .
+      dockerfile: feed-service/Dockerfile
+    container_name: feed-feed-service
+    ports:
+      - "8083:8083"
+    environment:
+      EUREKA_HOST: eureka-server
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      redis:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_user_data:
+  postgres_post_data:
+  rabbitmq_data:
+  post_uploads:

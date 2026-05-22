@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:user_test_db;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+
+eureka:
+  client:
+    enabled: false
+
+jwt:
+  secret: test-secret-key-that-is-at-least-256-bits-long-for-unit-tests-only
+  expiration-ms: 86400000

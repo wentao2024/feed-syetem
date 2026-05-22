@@ -1,0 +1,81 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        # Public routes (no auth required)
+        - id: user-auth
+          uri: lb://user-service
+          predicates:
+            - Path=/api/users/register, /api/users/login
+          filters:
+            - StripPrefix=0
+
+        # Protected routes
+        - id: user-service
+          uri: lb://user-service
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - JwtAuthFilter
+
+        - id: post-service
+          uri: lb://post-service
+          predicates:
+            - Path=/api/posts/**
+          filters:
+            - JwtAuthFilter
+
+        - id: feed-service
+          uri: lb://feed-service
+          predicates:
+            - Path=/api/feed/**
+          filters:
+            - JwtAuthFilter
+
+        # Swagger UI aggregation
+        - id: user-service-docs
+          uri: lb://user-service
+          predicates:
+            - Path=/user-service/v3/api-docs
+          filters:
+            - RewritePath=/user-service/(?<segment>.*), /$\{segment}
+
+        - id: post-service-docs
+          uri: lb://post-service
+          predicates:
+            - Path=/post-service/v3/api-docs
+          filters:
+            - RewritePath=/post-service/(?<segment>.*), /$\{segment}
+
+        - id: feed-service-docs
+          uri: lb://feed-service
+          predicates:
+            - Path=/feed-service/v3/api-docs
+          filters:
+            - RewritePath=/feed-service/(?<segment>.*), /$\{segment}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+  instance:
+    prefer-ip-address: true
+
+jwt:
+  secret: ${JWT_SECRET:feed-system-secret-key-must-be-at-least-256-bits-long}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

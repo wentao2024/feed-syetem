@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:post_test_db;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+
+eureka:
+  client:
+    enabled: false
+
+storage:
+  upload-dir: /tmp/feed-test-uploads
+  base-url: http://localhost:8082/files
