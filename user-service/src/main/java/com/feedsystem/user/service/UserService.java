@@ -1,5 +1,8 @@
 package com.feedsystem.user.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.feedsystem.common.dto.UserDTO;
 import com.feedsystem.common.event.FollowEvent;
 import com.feedsystem.common.exception.BusinessException;
@@ -10,13 +13,11 @@ import com.feedsystem.user.dto.RegisterRequest;
 import com.feedsystem.user.dto.UpdateProfileRequest;
 import com.feedsystem.user.entity.Follow;
 import com.feedsystem.user.entity.User;
+import com.feedsystem.user.mapper.FollowMapper;
+import com.feedsystem.user.mapper.UserMapper;
 import com.feedsystem.user.messaging.MessagePublisher;
-import com.feedsystem.user.repository.FollowRepository;
-import com.feedsystem.user.repository.UserRepository;
 import com.feedsystem.user.security.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,18 +28,20 @@ import java.util.List;
 @RequiredArgsConstructor
 public class UserService {
 
-    private final UserRepository userRepository;
-    private final FollowRepository followRepository;
+    private final UserMapper userMapper;
+    private final FollowMapper followMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final MessagePublisher messagePublisher;
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByUsername(request.getUsername())) {
+        if (userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getUsername, request.getUsername())) > 0) {
             throw new BusinessException(ErrorCode.USER_ALREADY_EXISTS);
         }
-        if (userRepository.existsByEmail(request.getEmail())) {
+        if (userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getEmail, request.getEmail())) > 0) {
             throw new BusinessException(ErrorCode.USER_ALREADY_EXISTS);
         }
 
@@ -47,7 +50,7 @@ public class UserService {
             .email(request.getEmail())
             .password(passwordEncoder.encode(request.getPassword()))
             .build();
-        userRepository.save(user);
+        userMapper.insert(user);
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getUsername());
         return AuthResponse.builder()
@@ -57,16 +60,18 @@ public class UserService {
     }
 
     public AuthResponse login(LoginRequest request) {
-        User user = userRepository.findByUsername(request.getUsername())
-            .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
-
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+            .eq(User::getUsername, request.getUsername()));
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        }
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED);
         }
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getUsername());
-        long followers = followRepository.countByFolloweeId(user.getId());
-        long following = followRepository.countByFollowerId(user.getId());
+        long followers = countFollowers(user.getId());
+        long following = countFollowing(user.getId());
         return AuthResponse.builder()
             .token(token)
             .user(toDTO(user, followers, following))
@@ -74,37 +79,35 @@ public class UserService {
     }
 
     public UserDTO getProfile(Long userId) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
-        long followers = followRepository.countByFolloweeId(userId);
-        long following = followRepository.countByFollowerId(userId);
-        return toDTO(user, followers, following);
+        User user = userMapper.selectById(userId);
+        if (user == null) throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        return toDTO(user, countFollowers(userId), countFollowing(userId));
     }
 
     @Transactional
     public UserDTO updateProfile(Long userId, UpdateProfileRequest request) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        User user = userMapper.selectById(userId);
+        if (user == null) throw new BusinessException(ErrorCode.USER_NOT_FOUND);
 
         if (request.getAvatarUrl() != null) user.setAvatarUrl(request.getAvatarUrl());
         if (request.getBio() != null)       user.setBio(request.getBio());
+        userMapper.updateById(user);
 
-        userRepository.save(user);
-        long followers = followRepository.countByFolloweeId(userId);
-        long following = followRepository.countByFollowerId(userId);
-        return toDTO(user, followers, following);
+        return toDTO(user, countFollowers(userId), countFollowing(userId));
     }
 
     @Transactional
     public void follow(Long followerId, Long followeeId) {
-        if (!userRepository.existsById(followeeId)) {
+        if (userMapper.selectById(followeeId) == null) {
             throw new BusinessException(ErrorCode.USER_NOT_FOUND);
         }
-        if (followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)) {
+        if (followMapper.selectCount(new LambdaQueryWrapper<Follow>()
+                .eq(Follow::getFollowerId, followerId)
+                .eq(Follow::getFolloweeId, followeeId)) > 0) {
             throw new BusinessException(ErrorCode.ALREADY_FOLLOWING);
         }
 
-        followRepository.save(Follow.builder()
+        followMapper.insert(Follow.builder()
             .followerId(followerId)
             .followeeId(followeeId)
             .build());
@@ -118,10 +121,12 @@ public class UserService {
 
     @Transactional
     public void unfollow(Long followerId, Long followeeId) {
-        Follow follow = followRepository.findByFollowerIdAndFolloweeId(followerId, followeeId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOLLOWING));
+        Follow follow = followMapper.selectOne(new LambdaQueryWrapper<Follow>()
+            .eq(Follow::getFollowerId, followerId)
+            .eq(Follow::getFolloweeId, followeeId));
+        if (follow == null) throw new BusinessException(ErrorCode.NOT_FOLLOWING);
 
-        followRepository.delete(follow);
+        followMapper.deleteById(follow.getId());
 
         messagePublisher.publishFollowEvent(FollowEvent.builder()
             .followerId(followerId)
@@ -130,18 +135,32 @@ public class UserService {
             .build());
     }
 
-    public Page<UserDTO> getFollowers(Long userId, Pageable pageable) {
-        return followRepository.findByFolloweeId(userId, pageable)
-            .map(f -> getProfile(f.getFollowerId()));
+    public IPage<UserDTO> getFollowers(Long userId, int page, int size) {
+        IPage<Follow> followPage = followMapper.selectPage(
+            new Page<>(page, size),
+            new LambdaQueryWrapper<Follow>().eq(Follow::getFolloweeId, userId));
+        return followPage.convert(f -> getProfile(f.getFollowerId()));
     }
 
-    public Page<UserDTO> getFollowing(Long userId, Pageable pageable) {
-        return followRepository.findByFollowerId(userId, pageable)
-            .map(f -> getProfile(f.getFolloweeId()));
+    public IPage<UserDTO> getFollowing(Long userId, int page, int size) {
+        IPage<Follow> followPage = followMapper.selectPage(
+            new Page<>(page, size),
+            new LambdaQueryWrapper<Follow>().eq(Follow::getFollowerId, userId));
+        return followPage.convert(f -> getProfile(f.getFolloweeId()));
     }
 
     public List<Long> getFollowerIds(Long userId) {
-        return followRepository.findFollowerIdsByFolloweeId(userId);
+        return followMapper.selectFollowerIdsByFolloweeId(userId);
+    }
+
+    private long countFollowers(Long userId) {
+        return followMapper.selectCount(new LambdaQueryWrapper<Follow>()
+            .eq(Follow::getFolloweeId, userId));
+    }
+
+    private long countFollowing(Long userId) {
+        return followMapper.selectCount(new LambdaQueryWrapper<Follow>()
+            .eq(Follow::getFollowerId, userId));
     }
 
     private UserDTO toDTO(User user, long followers, long following) {

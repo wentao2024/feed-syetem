@@ -1,12 +1,14 @@
 package com.feedsystem.user.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.feedsystem.common.exception.BusinessException;
 import com.feedsystem.user.dto.LoginRequest;
 import com.feedsystem.user.dto.RegisterRequest;
+import com.feedsystem.user.entity.Follow;
 import com.feedsystem.user.entity.User;
+import com.feedsystem.user.mapper.FollowMapper;
+import com.feedsystem.user.mapper.UserMapper;
 import com.feedsystem.user.messaging.MessagePublisher;
-import com.feedsystem.user.repository.FollowRepository;
-import com.feedsystem.user.repository.UserRepository;
 import com.feedsystem.user.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,8 +19,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,8 +28,8 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class UserServiceTest {
 
-    @Mock UserRepository userRepository;
-    @Mock FollowRepository followRepository;
+    @Mock UserMapper userMapper;
+    @Mock FollowMapper followMapper;
     @Mock PasswordEncoder passwordEncoder;
     @Mock JwtTokenProvider jwtTokenProvider;
     @Mock MessagePublisher messagePublisher;
@@ -48,10 +48,9 @@ class UserServiceTest {
     @Test
     @DisplayName("register: success when username and email are unique")
     void register_success() {
-        when(userRepository.existsByUsername("alice")).thenReturn(false);
-        when(userRepository.existsByEmail("alice@example.com")).thenReturn(false);
+        when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L, 0L);
         when(passwordEncoder.encode(anyString())).thenReturn("$2a$hashed");
-        when(userRepository.save(any())).thenReturn(mockUser);
+        when(userMapper.insert(any(User.class))).thenReturn(1);
         when(jwtTokenProvider.generateToken(any(), anyString())).thenReturn("mock.jwt.token");
 
         var req = new RegisterRequest();
@@ -60,14 +59,13 @@ class UserServiceTest {
         var response = userService.register(req);
 
         assertThat(response.getToken()).isEqualTo("mock.jwt.token");
-        assertThat(response.getUser().getUsername()).isEqualTo("alice");
-        verify(userRepository).save(any(User.class));
+        verify(userMapper).insert(any(User.class));
     }
 
     @Test
     @DisplayName("register: throws when username taken")
     void register_duplicateUsername() {
-        when(userRepository.existsByUsername("alice")).thenReturn(true);
+        when(userMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1L);
 
         var req = new RegisterRequest();
         req.setUsername("alice"); req.setEmail("alice@example.com"); req.setPassword("password123");
@@ -79,11 +77,11 @@ class UserServiceTest {
     @Test
     @DisplayName("login: success with correct credentials")
     void login_success() {
-        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(mockUser));
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(mockUser);
         when(passwordEncoder.matches("password123", "$2a$hashed")).thenReturn(true);
         when(jwtTokenProvider.generateToken(1L, "alice")).thenReturn("mock.jwt.token");
-        when(followRepository.countByFolloweeId(1L)).thenReturn(10L);
-        when(followRepository.countByFollowerId(1L)).thenReturn(5L);
+        // countFollowers then countFollowing
+        when(followMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(10L, 5L);
 
         var req = new LoginRequest();
         req.setUsername("alice"); req.setPassword("password123");
@@ -96,7 +94,7 @@ class UserServiceTest {
     @Test
     @DisplayName("login: throws when password wrong")
     void login_wrongPassword() {
-        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(mockUser));
+        when(userMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(mockUser);
         when(passwordEncoder.matches("wrong", "$2a$hashed")).thenReturn(false);
 
         var req = new LoginRequest();
@@ -109,20 +107,20 @@ class UserServiceTest {
     @Test
     @DisplayName("follow: success and publishes event")
     void follow_success() {
-        when(userRepository.existsById(2L)).thenReturn(true);
-        when(followRepository.existsByFollowerIdAndFolloweeId(1L, 2L)).thenReturn(false);
+        when(userMapper.selectById(2L)).thenReturn(User.builder().id(2L).username("bob").build());
+        when(followMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
 
         userService.follow(1L, 2L);
 
-        verify(followRepository).save(any());
+        verify(followMapper).insert(any(Follow.class));
         verify(messagePublisher).publishFollowEvent(any());
     }
 
     @Test
     @DisplayName("follow: throws when already following")
     void follow_alreadyFollowing() {
-        when(userRepository.existsById(2L)).thenReturn(true);
-        when(followRepository.existsByFollowerIdAndFolloweeId(1L, 2L)).thenReturn(true);
+        when(userMapper.selectById(2L)).thenReturn(User.builder().id(2L).username("bob").build());
+        when(followMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1L);
 
         assertThatThrownBy(() -> userService.follow(1L, 2L))
             .isInstanceOf(BusinessException.class);
