@@ -1,15 +1,11 @@
 package com.feedsystem.post.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.*;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
 
-@Entity
-@Table(name = "likes",
-    uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "post_id"}),
-    indexes = @Index(name = "idx_likes_post_id", columnList = "post_id"))
+@TableName("likes")
 @Data
 @Builder
 @NoArgsConstructor
@@ -17,17 +13,15 @@ import java.time.LocalDateTime;
 @EqualsAndHashCode(of = {"userId", "postId"})
 public class Like {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(name = "user_id", nullable = false)
+    @TableField("user_id")
     private Long userId;
 
-    @Column(name = "post_id", nullable = false)
+    @TableField("post_id")
     private Long postId;
 
-    @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }
