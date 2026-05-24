@@ -81,6 +81,11 @@ services:
     container_name: feed-eureka
     ports:
       - "8761:8761"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
 
 
   api-gateway:
