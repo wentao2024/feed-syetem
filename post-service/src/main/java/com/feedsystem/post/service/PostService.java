@@ -1,17 +1,18 @@
 package com.feedsystem.post.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.feedsystem.common.dto.PostDTO;
 import com.feedsystem.common.event.PostCreatedEvent;
 import com.feedsystem.common.exception.BusinessException;
 import com.feedsystem.common.exception.ErrorCode;
 import com.feedsystem.post.entity.Like;
 import com.feedsystem.post.entity.Post;
+import com.feedsystem.post.mapper.LikeMapper;
+import com.feedsystem.post.mapper.PostMapper;
 import com.feedsystem.post.messaging.MessagePublisher;
-import com.feedsystem.post.repository.LikeRepository;
-import com.feedsystem.post.repository.PostRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,8 +25,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class PostService {
 
-    private final PostRepository postRepository;
-    private final LikeRepository likeRepository;
+    private final PostMapper postMapper;
+    private final LikeMapper likeMapper;
     private final FileStorageService fileStorageService;
     private final MessagePublisher messagePublisher;
 
@@ -42,7 +43,7 @@ public class PostService {
             .content(content)
             .imageUrls(imageUrls)
             .build();
-        postRepository.save(post);
+        postMapper.insert(post);
 
         messagePublisher.publishPostCreated(PostCreatedEvent.builder()
             .postId(post.getId())
@@ -54,69 +55,68 @@ public class PostService {
     }
 
     public PostDTO getPost(Long postId, Long currentUserId) {
-        Post post = findPostById(postId);
-        boolean liked = currentUserId != null &&
-            likeRepository.existsByUserIdAndPostId(currentUserId, postId);
+        Post post = postMapper.selectById(postId);
+        if (post == null) throw new BusinessException(ErrorCode.POST_NOT_FOUND);
+        boolean liked = currentUserId != null && likeMapper.selectCount(new LambdaQueryWrapper<Like>()
+            .eq(Like::getUserId, currentUserId).eq(Like::getPostId, postId)) > 0;
         return toDTO(post, null, null, liked);
     }
 
-    public Page<PostDTO> getUserPosts(Long userId, Long currentUserId, Pageable pageable) {
-        return postRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
-            .map(p -> {
-                boolean liked = currentUserId != null &&
-                    likeRepository.existsByUserIdAndPostId(currentUserId, p.getId());
-                return toDTO(p, null, null, liked);
-            });
+    public IPage<PostDTO> getUserPosts(Long userId, Long currentUserId, int page, int size) {
+        IPage<Post> postPage = postMapper.selectPage(
+            new Page<>(page, size),
+            new LambdaQueryWrapper<Post>()
+                .eq(Post::getUserId, userId)
+                .orderByDesc(Post::getCreatedAt));
+        return postPage.convert(p -> {
+            boolean liked = currentUserId != null && likeMapper.selectCount(new LambdaQueryWrapper<Like>()
+                .eq(Like::getUserId, currentUserId).eq(Like::getPostId, p.getId())) > 0;
+            return toDTO(p, null, null, liked);
+        });
     }
 
     @Transactional
     public void deletePost(Long postId, Long userId) {
-        Post post = findPostById(postId);
-        if (!post.getUserId().equals(userId)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN);
-        }
+        Post post = postMapper.selectById(postId);
+        if (post == null) throw new BusinessException(ErrorCode.POST_NOT_FOUND);
+        if (!post.getUserId().equals(userId)) throw new BusinessException(ErrorCode.FORBIDDEN);
         post.getImageUrls().forEach(fileStorageService::delete);
-        postRepository.delete(post);
+        postMapper.deleteById(postId);
     }
 
     @Transactional
     public void likePost(Long postId, Long userId) {
-        if (!postRepository.existsById(postId)) {
-            throw new BusinessException(ErrorCode.POST_NOT_FOUND);
-        }
-        if (likeRepository.existsByUserIdAndPostId(userId, postId)) {
+        Post post = postMapper.selectById(postId);
+        if (post == null) throw new BusinessException(ErrorCode.POST_NOT_FOUND);
+        if (likeMapper.selectCount(new LambdaQueryWrapper<Like>()
+                .eq(Like::getUserId, userId).eq(Like::getPostId, postId)) > 0) {
             throw new BusinessException(ErrorCode.ALREADY_LIKED);
         }
-        likeRepository.save(Like.builder().userId(userId).postId(postId).build());
-        postRepository.findById(postId).ifPresent(p -> {
-            p.setLikeCount(p.getLikeCount() + 1);
-            postRepository.save(p);
-        });
+        likeMapper.insert(Like.builder().userId(userId).postId(postId).build());
+        post.setLikeCount(post.getLikeCount() + 1);
+        postMapper.updateById(post);
     }
 
     @Transactional
     public void unlikePost(Long postId, Long userId) {
-        Like like = likeRepository.findByUserIdAndPostId(userId, postId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.POST_NOT_FOUND));
-        likeRepository.delete(like);
-        postRepository.findById(postId).ifPresent(p -> {
-            p.setLikeCount(Math.max(0, p.getLikeCount() - 1));
-            postRepository.save(p);
-        });
+        Like like = likeMapper.selectOne(new LambdaQueryWrapper<Like>()
+            .eq(Like::getUserId, userId).eq(Like::getPostId, postId));
+        if (like == null) throw new BusinessException(ErrorCode.POST_NOT_FOUND);
+        likeMapper.deleteById(like.getId());
+        Post post = postMapper.selectById(postId);
+        if (post != null) {
+            post.setLikeCount(Math.max(0, post.getLikeCount() - 1));
+            postMapper.updateById(post);
+        }
     }
 
     public List<PostDTO> getPostsByIds(List<Long> postIds) {
-        Map<Long, Post> postMap = postRepository.findByIdIn(postIds)
+        Map<Long, Post> postMap = postMapper.selectBatchIds(postIds)
             .stream().collect(Collectors.toMap(Post::getId, p -> p));
         return postIds.stream()
             .filter(postMap::containsKey)
             .map(id -> toDTO(postMap.get(id), null, null, false))
             .collect(Collectors.toList());
-    }
-
-    private Post findPostById(Long postId) {
-        return postRepository.findById(postId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.POST_NOT_FOUND));
     }
 
     private PostDTO toDTO(Post post, String username, String avatarUrl, boolean likedByMe) {

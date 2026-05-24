@@ -1,10 +1,12 @@
 package com.feedsystem.post.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.feedsystem.common.exception.BusinessException;
+import com.feedsystem.post.entity.Like;
 import com.feedsystem.post.entity.Post;
+import com.feedsystem.post.mapper.LikeMapper;
+import com.feedsystem.post.mapper.PostMapper;
 import com.feedsystem.post.messaging.MessagePublisher;
-import com.feedsystem.post.repository.LikeRepository;
-import com.feedsystem.post.repository.PostRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,7 +16,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -24,8 +25,8 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
 
-    @Mock PostRepository postRepository;
-    @Mock LikeRepository likeRepository;
+    @Mock PostMapper postMapper;
+    @Mock LikeMapper likeMapper;
     @Mock FileStorageService fileStorageService;
     @Mock MessagePublisher messagePublisher;
 
@@ -43,7 +44,7 @@ class PostServiceTest {
     @Test
     @DisplayName("createPost: saves post and publishes RabbitMQ event")
     void createPost_success() {
-        when(postRepository.save(any())).thenReturn(mockPost);
+        when(postMapper.insert(any(Post.class))).thenReturn(1);
 
         var result = postService.createPost(1L, "alice", "Hello World!", null);
 
@@ -54,21 +55,20 @@ class PostServiceTest {
     @Test
     @DisplayName("likePost: increments like count")
     void likePost_success() {
-        when(postRepository.existsById(1L)).thenReturn(true);
-        when(likeRepository.existsByUserIdAndPostId(2L, 1L)).thenReturn(false);
-        when(postRepository.findById(1L)).thenReturn(Optional.of(mockPost));
+        when(postMapper.selectById(1L)).thenReturn(mockPost);
+        when(likeMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
 
         postService.likePost(1L, 2L);
 
-        verify(likeRepository).save(any());
+        verify(likeMapper).insert(any(Like.class));
         assertThat(mockPost.getLikeCount()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("likePost: throws when already liked")
     void likePost_alreadyLiked() {
-        when(postRepository.existsById(1L)).thenReturn(true);
-        when(likeRepository.existsByUserIdAndPostId(2L, 1L)).thenReturn(true);
+        when(postMapper.selectById(1L)).thenReturn(mockPost);
+        when(likeMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1L);
 
         assertThatThrownBy(() -> postService.likePost(1L, 2L))
             .isInstanceOf(BusinessException.class);
@@ -77,7 +77,7 @@ class PostServiceTest {
     @Test
     @DisplayName("deletePost: throws FORBIDDEN when not the author")
     void deletePost_forbidden() {
-        when(postRepository.findById(1L)).thenReturn(Optional.of(mockPost));
+        when(postMapper.selectById(1L)).thenReturn(mockPost);
 
         assertThatThrownBy(() -> postService.deletePost(1L, 99L))
             .isInstanceOf(BusinessException.class)
@@ -88,7 +88,7 @@ class PostServiceTest {
     @DisplayName("getPostsByIds: preserves requested order")
     void getPostsByIds_preservesOrder() {
         Post p2 = Post.builder().id(2L).userId(2L).content("Post 2").imageUrls(List.of()).likeCount(0).build();
-        when(postRepository.findByIdIn(List.of(1L, 2L))).thenReturn(List.of(mockPost, p2));
+        when(postMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(mockPost, p2));
 
         var result = postService.getPostsByIds(List.of(1L, 2L));
 
