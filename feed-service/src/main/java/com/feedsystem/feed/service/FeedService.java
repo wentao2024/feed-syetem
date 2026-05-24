@@ -4,32 +4,51 @@ import com.feedsystem.common.dto.PostDTO;
 import com.feedsystem.feed.client.PostServiceClient;
 import com.feedsystem.feed.client.UserServiceClient;
 import com.feedsystem.feed.dto.FeedPageResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FeedService {
 
     private static final String FEED_KEY_PREFIX = "feed:";
+    private static final String POST_CACHE_KEY_PREFIX = "post:";
+    private static final Duration POST_CACHE_TTL = Duration.ofHours(24);
     private static final int MAX_FEED_SIZE = 500;
     private static final int LARGE_ACCOUNT_THRESHOLD = 1000;
 
     private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, PostDTO> postCacheTemplate;
     private final UserServiceClient userServiceClient;
     private final PostServiceClient postServiceClient;
 
+    public FeedService(
+            RedisTemplate<String, String> redisTemplate,
+            @Qualifier("postCacheTemplate") RedisTemplate<String, PostDTO> postCacheTemplate,
+            UserServiceClient userServiceClient,
+            PostServiceClient postServiceClient) {
+        this.redisTemplate = redisTemplate;
+        this.postCacheTemplate = postCacheTemplate;
+        this.userServiceClient = userServiceClient;
+        this.postServiceClient = postServiceClient;
+    }
+
     /**
-     * Cursor-based feed retrieval. cursor = last seen score (timestamp millis).
-     * Avoids offset-based pagination which degrades with large offsets.
+     * Cursor-based feed retrieval.
+     * Reads post IDs from the user's Redis ZSet, resolves PostDTOs from a Redis cache
+     * (post:{id}), and only calls post-service for cache misses — eliminating the Feign
+     * bottleneck that caused 5s P99 under 150 concurrent readers.
      */
     public FeedPageResponse getFeed(Long userId, Long cursor, int size) {
         String key = FEED_KEY_PREFIX + userId;
@@ -51,7 +70,37 @@ public class FeedService {
             .map(t -> Long.parseLong(t.getValue()))
             .collect(Collectors.toList());
 
-        List<PostDTO> posts = postServiceClient.getPostsByIds(postIds);
+        // 1. Batch-fetch from Redis post cache
+        List<String> cacheKeys = postIds.stream()
+            .map(id -> POST_CACHE_KEY_PREFIX + id)
+            .collect(Collectors.toList());
+        List<PostDTO> cached = postCacheTemplate.opsForValue().multiGet(cacheKeys);
+
+        // 2. Find misses and call post-service only for those
+        List<Long> missIds = new ArrayList<>();
+        for (int i = 0; i < postIds.size(); i++) {
+            if (cached == null || cached.get(i) == null) {
+                missIds.add(postIds.get(i));
+            }
+        }
+
+        Map<Long, PostDTO> fetchedMap = new HashMap<>();
+        if (!missIds.isEmpty()) {
+            log.debug("Post cache miss for {} ids, calling post-service", missIds.size());
+            List<PostDTO> fetched = postServiceClient.getPostsByIds(missIds);
+            for (PostDTO dto : fetched) {
+                fetchedMap.put(dto.getId(), dto);
+                postCacheTemplate.opsForValue().set(POST_CACHE_KEY_PREFIX + dto.getId(), dto, POST_CACHE_TTL);
+            }
+        }
+
+        // 3. Merge cached + freshly fetched in original ZSet order
+        List<PostDTO> posts = new ArrayList<>(postIds.size());
+        for (int i = 0; i < postIds.size(); i++) {
+            PostDTO dto = (cached != null) ? cached.get(i) : null;
+            if (dto == null) dto = fetchedMap.get(postIds.get(i));
+            if (dto != null) posts.add(dto);
+        }
 
         Long nextCursor = hasMore
             ? page.stream().mapToLong(t -> t.getScore().longValue()).min().orElse(0)
@@ -68,9 +117,20 @@ public class FeedService {
     /**
      * Fan-out: push postId into each follower's Redis ZSET feed.
      * Skips large accounts (LARGE_ACCOUNT_THRESHOLD+) — their followers pull instead.
+     * Also pre-warms the PostDTO cache so first reads after a new post are instant.
      */
     public void fanOut(Long postId, Long authorId, long scoreMillis) {
         List<Long> followerIds = userServiceClient.getFollowerIds(authorId);
+
+        // Pre-warm post cache so getFeed() readers don't need to call post-service
+        try {
+            List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
+            if (!dtos.isEmpty()) {
+                postCacheTemplate.opsForValue().set(POST_CACHE_KEY_PREFIX + postId, dtos.get(0), POST_CACHE_TTL);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to pre-warm cache for postId={}: {}", postId, e.getMessage());
+        }
 
         if (followerIds.size() >= LARGE_ACCOUNT_THRESHOLD) {
             log.info("Skipping push fan-out for large account authorId={}, followers={}", authorId, followerIds.size());
@@ -81,7 +141,6 @@ public class FeedService {
         for (Long followerId : followerIds) {
             String key = FEED_KEY_PREFIX + followerId;
             redisTemplate.opsForZSet().add(key, postIdStr, scoreMillis);
-            // Cap feed length to avoid unbounded memory growth
             redisTemplate.opsForZSet().removeRange(key, 0, -(MAX_FEED_SIZE + 1));
         }
         log.info("Fan-out complete: postId={} pushed to {} followers", postId, followerIds.size());
@@ -91,10 +150,9 @@ public class FeedService {
      * When a user follows someone, backfill their recent posts into the follower's feed.
      */
     public void backfillOnFollow(Long followerId, Long followeeId) {
-        // Pull latest N posts from followee's own feed and merge into follower's feed
         String followeeFeedKey = FEED_KEY_PREFIX + followeeId;
         Set<ZSetOperations.TypedTuple<String>> recentPosts = redisTemplate.opsForZSet()
-            .reverseRangeWithScores(followeeFeedKey, 0, 19); // last 20 posts
+            .reverseRangeWithScores(followeeFeedKey, 0, 19);
 
         if (recentPosts == null || recentPosts.isEmpty()) return;
 
