@@ -1,18 +1,13 @@
 package com.feedsystem.post.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.*;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
-@Entity
-@Table(name = "posts",
-    indexes = {
-        @Index(name = "idx_posts_user_id", columnList = "user_id"),
-        @Index(name = "idx_posts_created_at", columnList = "created_at DESC")
-    })
+@TableName(value = "posts", autoResultMap = true)
 @Data
 @Builder
 @NoArgsConstructor
@@ -20,28 +15,22 @@ import java.util.List;
 @EqualsAndHashCode(of = "id")
 public class Post {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(name = "user_id", nullable = false)
+    @TableField("user_id")
     private Long userId;
 
-    @Column(columnDefinition = "TEXT")
     private String content;
 
-    // PostgreSQL array of image URLs stored as JSON
-    @ElementCollection
-    @CollectionTable(name = "post_images", joinColumns = @JoinColumn(name = "post_id"))
-    @Column(name = "image_url", length = 500)
-    @OrderColumn(name = "image_order")
-    private List<String> imageUrls;
+    @TableField(value = "image_urls", typeHandler = JacksonTypeHandler.class)
+    @Builder.Default
+    private List<String> imageUrls = List.of();
 
-    @Column(name = "like_count", nullable = false)
+    @TableField("like_count")
     @Builder.Default
     private Integer likeCount = 0;
 
-    @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

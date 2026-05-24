@@ -1,13 +1,12 @@
 package com.feedsystem.post.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.feedsystem.common.dto.ApiResponse;
 import com.feedsystem.common.dto.PostDTO;
 import com.feedsystem.post.service.PostService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -44,13 +43,13 @@ public class PostController {
 
     @GetMapping("/user/{userId}")
     @Operation(summary = "Get all posts by a user")
-    public ResponseEntity<ApiResponse<Page<PostDTO>>> getUserPosts(
+    public ResponseEntity<ApiResponse<IPage<PostDTO>>> getUserPosts(
             @PathVariable Long userId,
             @RequestHeader(value = "X-User-Id", required = false) Long currentUserId,
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(ApiResponse.success(
-            postService.getUserPosts(userId, currentUserId, PageRequest.of(page, size))));
+            postService.getUserPosts(userId, currentUserId, page, size)));
     }
 
     @DeleteMapping("/{postId}")
