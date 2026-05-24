@@ -5,19 +5,20 @@ spring:
     username: sa
     password:
 
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.H2Dialect
-
   flyway:
     enabled: false
 
   rabbitmq:
     host: localhost
     port: 5672
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+    banner: false
 
 eureka:
   client:
