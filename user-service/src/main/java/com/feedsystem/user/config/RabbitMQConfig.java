@@ -22,11 +22,13 @@ public class RabbitMQConfig {
 
     @Bean
     public TopicExchange feedExchange() {
+
         return new TopicExchange(EXCHANGE, true, false);
     }
 
     @Bean
     public Queue followQueue() {
+
         return QueueBuilder.durable(FOLLOW_QUEUE).build();
     }
 
