@@ -17,11 +17,13 @@ public class RabbitMQConfig {
 
     @Bean
     public TopicExchange feedExchange() {
+
         return new TopicExchange(EXCHANGE, true, false);
     }
 
     @Bean
     public Queue postCreatedQueue() {
+
         return QueueBuilder.durable(POST_CREATED_QUEUE).build();
     }
 
