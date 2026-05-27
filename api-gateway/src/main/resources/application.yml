@@ -1,9 +1,15 @@
 server:
   port: 8080
+  tomcat:
+    threads:
+      max: 400        # 默认 200，提高到 400
+    accept-count: 200 # 默认 100，等待队列加大
+    connection-timeout: 20000
 
 spring:
   application:
     name: api-gateway
+
 
   cloud:
     gateway:
