@@ -28,6 +28,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class UserService {
 
+    private static final int LARGE_V_THRESHOLD = 1000;
+
     private final UserMapper userMapper;
     private final FollowMapper followMapper;
     private final PasswordEncoder passwordEncoder;
@@ -151,6 +153,10 @@ public class UserService {
 
     public List<Long> getFollowerIds(Long userId) {
         return followMapper.selectFollowerIdsByFolloweeId(userId);
+    }
+
+    public List<Long> getLargeVFolloweeIds(Long userId) {
+        return followMapper.selectLargeVFolloweeIds(userId, LARGE_V_THRESHOLD);
     }
 
     private long countFollowers(Long userId) {

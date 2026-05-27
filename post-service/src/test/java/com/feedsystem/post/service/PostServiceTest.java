@@ -61,7 +61,8 @@ class PostServiceTest {
         postService.likePost(1L, 2L);
 
         verify(likeMapper).insert(any(Like.class));
-        assertThat(mockPost.getLikeCount()).isEqualTo(1);
+        // 原子 SQL UPDATE，不再修改内存对象；验证 mapper 被正确调用
+        verify(postMapper).incrementLikeCount(1L);
     }
 
     @Test
