@@ -15,6 +15,7 @@ import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -29,6 +30,7 @@ class FeedServiceTest {
 
     @Mock RedisTemplate<String, String> redisTemplate;
     @Mock ZSetOperations<String, String> zSetOps;
+    @Mock ValueOperations<String, String> stringValueOps;
     @Mock RedisTemplate<String, PostDTO> postCacheTemplate;
     @Mock ValueOperations<String, PostDTO> valueOps;
     @Mock UserServiceClient userServiceClient;
@@ -42,8 +44,13 @@ class FeedServiceTest {
     void setUp() {
         feedService = new FeedService(redisTemplate, postCacheTemplate, userServiceClient, postServiceClient);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        lenient().when(redisTemplate.opsForValue()).thenReturn(stringValueOps);
+        // 缓存默认 miss，走实际的 userServiceClient 调用
+        lenient().when(stringValueOps.get(anyString())).thenReturn(null);
         lenient().when(postCacheTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(postServiceClient.getPostsByIds(any())).thenReturn(List.of());
+        lenient().when(postServiceClient.getRecentPostsByAuthors(any())).thenReturn(List.of());
+        lenient().when(userServiceClient.getLargeVFolloweeIds(any())).thenReturn(List.of());
 
         // executePipelined uses an internal proxy as `ops`, bypassing the mock.
         // Intercept it and re-invoke the callback with the mock itself so zSetOps is used.
@@ -151,5 +158,59 @@ class FeedServiceTest {
         feedService.fanOut(99L, 1L, System.currentTimeMillis());
 
         verify(zSetOps, never()).add(anyString(), anyString(), anyDouble());
+    }
+
+    // ── large-V read path ────────────────────────────────────
+
+    @Test
+    @DisplayName("getFeed: large-V posts are pulled from post-service and merged with ZSet feed")
+    void getFeed_largeV_mergedWithPushFeed() {
+        // ZSet has one push post (score=1000 — intentionally tiny so large-V post sorts first)
+        Set<ZSetOperations.TypedTuple<String>> pushItems = new TreeSet<>(
+            (a, b) -> Double.compare(b.getScore(), a.getScore()));
+        pushItems.add(new ZSetOperations.TypedTuple<String>() {
+            public String getValue() { return "10"; }
+            public Double getScore() { return 1000.0; }
+            public int compareTo(ZSetOperations.TypedTuple<String> o) {
+                return Double.compare(o.getScore(), this.getScore());
+            }
+        });
+        when(zSetOps.reverseRangeByScoreWithScores(eq("feed:1"), anyDouble(), anyDouble(), anyLong(), anyLong()))
+            .thenReturn(pushItems);
+
+        // Push post resolved from cache
+        PostDTO pushPost = PostDTO.builder().id(10L).content("push post")
+            .createdAt(LocalDateTime.of(2024, 1, 1, 10, 0)).build();
+        when(valueOps.multiGet(any())).thenReturn(List.of(pushPost));
+
+        // Viewer follows one large-V
+        when(userServiceClient.getLargeVFolloweeIds(1L)).thenReturn(List.of(99L));
+
+        // Large-V has a post with a 2024 timestamp — epoch millis >> 1000, so it sorts first
+        PostDTO largeVPost = PostDTO.builder().id(20L).content("large-V post")
+            .createdAt(LocalDateTime.of(2024, 1, 1, 11, 0)).build();
+        when(postServiceClient.getRecentPostsByAuthors(any())).thenReturn(List.of(largeVPost));
+
+        var result = feedService.getFeed(1L, null, 20);
+
+        assertThat(result.getPosts()).hasSize(2);
+        // Large-V post has larger epoch millis → must come first after merge-sort
+        assertThat(result.getPosts().get(0).getId()).isEqualTo(20L);
+        assertThat(result.getPosts().get(1).getId()).isEqualTo(10L);
+        verify(postServiceClient).getRecentPostsByAuthors(any());
+        // Push post was cache-hit — getPostsByIds must NOT be called
+        verify(postServiceClient, never()).getPostsByIds(any());
+    }
+
+    @Test
+    @DisplayName("getFeed: getRecentPostsByAuthors never called when user has no large-V followees")
+    void getFeed_noLargeVFollowees_skipsPullPath() {
+        when(zSetOps.reverseRangeByScoreWithScores(eq("feed:1"), anyDouble(), anyDouble(), anyLong(), anyLong()))
+            .thenReturn(Set.of());
+        // getLargeVFolloweeIds is lenient-stubbed to return List.of() in @BeforeEach
+
+        feedService.getFeed(1L, null, 20);
+
+        verify(postServiceClient, never()).getRecentPostsByAuthors(any());
     }
 }
