@@ -12,4 +12,5 @@ public interface PostServiceClient {
 
     @PostMapping("/internal/posts/batch")
     List<PostDTO> getPostsByIds(@RequestBody List<Long> postIds);
+
 }
