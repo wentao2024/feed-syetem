@@ -20,7 +20,8 @@ public class MessagePublisher {
             log.info("Published post-created event: postId={}, authorId={}",
                 event.getPostId(), event.getAuthorId());
         } catch (Exception e) {
-            log.error("Failed to publish post-created event", e);
+            log.error("Failed to publish post-created event, rolling back transaction", e);
+            throw new RuntimeException("MQ publish failed: " + e.getMessage(), e);
         }
     }
 }
