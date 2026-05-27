@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -93,8 +96,7 @@ public class PostService {
             throw new BusinessException(ErrorCode.ALREADY_LIKED);
         }
         likeMapper.insert(Like.builder().userId(userId).postId(postId).build());
-        post.setLikeCount(post.getLikeCount() + 1);
-        postMapper.updateById(post);
+        postMapper.incrementLikeCount(postId);
     }
 
     @Transactional
@@ -103,11 +105,17 @@ public class PostService {
             .eq(Like::getUserId, userId).eq(Like::getPostId, postId));
         if (like == null) throw new BusinessException(ErrorCode.POST_NOT_FOUND);
         likeMapper.deleteById(like.getId());
-        Post post = postMapper.selectById(postId);
-        if (post != null) {
-            post.setLikeCount(Math.max(0, post.getLikeCount() - 1));
-            postMapper.updateById(post);
-        }
+        postMapper.decrementLikeCount(postId);
+    }
+
+    public List<PostDTO> getRecentPostsByAuthors(List<Long> authorIds, Long beforeScore, int limit) {
+        if (authorIds == null || authorIds.isEmpty()) return List.of();
+        LocalDateTime before = beforeScore != null
+            ? LocalDateTime.ofInstant(Instant.ofEpochMilli(beforeScore), ZoneId.systemDefault())
+            : null;
+        return postMapper.selectRecentByAuthorIds(authorIds, before, limit).stream()
+            .map(p -> toDTO(p, null, null, false))
+            .collect(Collectors.toList());
     }
 
     public List<PostDTO> getPostsByIds(List<Long> postIds) {
