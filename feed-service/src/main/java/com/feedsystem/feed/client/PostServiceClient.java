@@ -1,6 +1,7 @@
 package com.feedsystem.feed.client;
 
 import com.feedsystem.common.dto.PostDTO;
+import com.feedsystem.common.dto.RecentPostsRequest;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -13,4 +14,6 @@ public interface PostServiceClient {
     @PostMapping("/internal/posts/batch")
     List<PostDTO> getPostsByIds(@RequestBody List<Long> postIds);
 
+    @PostMapping("/internal/posts/by-authors")
+    List<PostDTO> getRecentPostsByAuthors(@RequestBody RecentPostsRequest request);
 }
