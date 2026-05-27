@@ -19,6 +19,7 @@ public class InternalPostController {
 
     @PostMapping("/batch")
     public List<PostDTO> getPostsByIds(@RequestBody List<Long> postIds) {
+
         return postService.getPostsByIds(postIds);
     }
 }
