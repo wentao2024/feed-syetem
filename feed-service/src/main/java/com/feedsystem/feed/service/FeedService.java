@@ -6,7 +6,9 @@ import com.feedsystem.feed.client.UserServiceClient;
 import com.feedsystem.feed.dto.FeedPageResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -122,27 +125,38 @@ public class FeedService {
     public void fanOut(Long postId, Long authorId, long scoreMillis) {
         List<Long> followerIds = userServiceClient.getFollowerIds(authorId);
 
-        // Pre-warm post cache so getFeed() readers don't need to call post-service
-        try {
-            List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
-            if (!dtos.isEmpty()) {
-                postCacheTemplate.opsForValue().set(POST_CACHE_KEY_PREFIX + postId, dtos.get(0), POST_CACHE_TTL);
+        // Pre-warm post cache asynchronously — runs in parallel with ZSet writes below.
+        // Best-effort: failure only means a cache miss on first read, not a fanOut failure.
+        CompletableFuture.runAsync(() -> {
+            try {
+                List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
+                if (!dtos.isEmpty()) {
+                    postCacheTemplate.opsForValue().set(POST_CACHE_KEY_PREFIX + postId, dtos.get(0), POST_CACHE_TTL);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to pre-warm cache for postId={}: {}", postId, e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to pre-warm cache for postId={}: {}", postId, e.getMessage());
-        }
+        });
 
         if (followerIds.size() >= LARGE_ACCOUNT_THRESHOLD) {
             log.info("Skipping push fan-out for large account authorId={}, followers={}", authorId, followerIds.size());
             return;
         }
 
+        // Pipeline: collapse N*2 round trips into 1
         String postIdStr = String.valueOf(postId);
-        for (Long followerId : followerIds) {
-            String key = FEED_KEY_PREFIX + followerId;
-            redisTemplate.opsForZSet().add(key, postIdStr, scoreMillis);
-            redisTemplate.opsForZSet().removeRange(key, 0, -(MAX_FEED_SIZE + 1));
-        }
+        redisTemplate.executePipelined(new SessionCallback<Object>() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public Object execute(RedisOperations ops) {
+                for (Long followerId : followerIds) {
+                    String key = FEED_KEY_PREFIX + followerId;
+                    ops.opsForZSet().add(key, postIdStr, scoreMillis);
+                    ops.opsForZSet().removeRange(key, 0, -(MAX_FEED_SIZE + 1));
+                }
+                return null;
+            }
+        });
         log.info("Fan-out complete: postId={} pushed to {} followers", postId, followerIds.size());
     }
 
@@ -156,9 +170,17 @@ public class FeedService {
 
         if (recentPosts == null || recentPosts.isEmpty()) return;
 
+        // Pipeline: write all backfill entries in one round trip
         String followerFeedKey = FEED_KEY_PREFIX + followerId;
-        recentPosts.forEach(item ->
-            redisTemplate.opsForZSet().add(followerFeedKey, item.getValue(), item.getScore()));
+        redisTemplate.executePipelined(new SessionCallback<Object>() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public Object execute(RedisOperations ops) {
+                recentPosts.forEach(item ->
+                    ops.opsForZSet().add(followerFeedKey, item.getValue(), item.getScore()));
+                return null;
+            }
+        });
 
         log.info("Backfilled {} posts for followerId={} from followeeId={}", recentPosts.size(), followerId, followeeId);
     }
