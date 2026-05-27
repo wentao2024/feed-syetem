@@ -11,4 +11,7 @@ public interface UserServiceClient {
 
     @GetMapping("/internal/users/{userId}/follower-ids")
     List<Long> getFollowerIds(@PathVariable Long userId);
+
+    @GetMapping("/internal/users/{userId}/large-v-followee-ids")
+    List<Long> getLargeVFolloweeIds(@PathVariable Long userId);
 }

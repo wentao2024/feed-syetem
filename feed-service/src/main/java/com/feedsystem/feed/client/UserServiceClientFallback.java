@@ -14,4 +14,10 @@ public class UserServiceClientFallback implements UserServiceClient {
         log.warn("UserService unavailable, returning empty followers for userId={}", userId);
         return List.of();
     }
+
+    @Override
+    public List<Long> getLargeVFolloweeIds(Long userId) {
+        log.warn("UserService unavailable, skipping large-V pull for userId={}", userId);
+        return List.of();
+    }
 }
