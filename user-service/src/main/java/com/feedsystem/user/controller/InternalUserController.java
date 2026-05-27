@@ -24,4 +24,9 @@ public class InternalUserController {
     public List<Long> getFollowerIds(@PathVariable Long userId) {
         return userService.getFollowerIds(userId);
     }
+
+    @GetMapping("/{userId}/large-v-followee-ids")
+    public List<Long> getLargeVFolloweeIds(@PathVariable Long userId) {
+        return userService.getLargeVFolloweeIds(userId);
+    }
 }
