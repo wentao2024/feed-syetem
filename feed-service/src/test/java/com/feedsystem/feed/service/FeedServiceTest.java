@@ -11,6 +11,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
@@ -37,11 +38,20 @@ class FeedServiceTest {
     FeedService feedService;
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         feedService = new FeedService(redisTemplate, postCacheTemplate, userServiceClient, postServiceClient);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         lenient().when(postCacheTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(postServiceClient.getPostsByIds(any())).thenReturn(List.of());
+
+        // executePipelined uses an internal proxy as `ops`, bypassing the mock.
+        // Intercept it and re-invoke the callback with the mock itself so zSetOps is used.
+        lenient().doAnswer(invocation -> {
+            SessionCallback<?> callback = invocation.getArgument(0);
+            callback.execute(redisTemplate);
+            return List.of();
+        }).when(redisTemplate).executePipelined(any(SessionCallback.class));
     }
 
     // ── getFeed ──────────────────────────────────────────────
