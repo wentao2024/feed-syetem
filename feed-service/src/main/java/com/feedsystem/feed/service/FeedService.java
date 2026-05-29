@@ -240,6 +240,7 @@ public class FeedService {
                 .map(Long::parseLong)
                 .collect(Collectors.toList());
         }
+
         List<Long> ids = userServiceClient.getLargeVFolloweeIds(userId);
         String value = ids.isEmpty() ? "" :
             ids.stream().map(String::valueOf).collect(Collectors.joining(","));
