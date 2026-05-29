@@ -86,6 +86,7 @@ public class FeedService {
         for (ZSetOperations.TypedTuple<String> t : pushItems) {
             mergedScores.put(Long.parseLong(t.getValue()), t.getScore());
         }
+
         for (PostDTO dto : largeVMap.values()) {
             double score = (double) dto.getCreatedAt()
                 .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
