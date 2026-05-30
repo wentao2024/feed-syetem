@@ -13,6 +13,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PostDTO {
+
     private Long id;
     private Long userId;
     private String username;
