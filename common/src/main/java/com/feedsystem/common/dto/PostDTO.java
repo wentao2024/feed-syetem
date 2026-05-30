@@ -22,4 +22,5 @@ public class PostDTO {
     private Integer likeCount;
     private Boolean likedByMe;
     private LocalDateTime createdAt;
+
 }
