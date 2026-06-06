@@ -8,6 +8,8 @@ import com.feedsystem.feed.dto.FeedPageResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisOperations;
+
+import java.util.concurrent.Executor;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,8 +34,10 @@ public class FeedService {
     private static final String FEED_KEY_PREFIX = "feed:";
     private static final String POST_CACHE_KEY_PREFIX = "post:";
     private static final String LARGE_V_FOLLOWEES_KEY_PREFIX = "largev_followees:";
+    private static final String LV_RECENT_KEY_PREFIX = "lv_recent:";
     private static final Duration POST_CACHE_TTL = Duration.ofHours(24);
     private static final Duration LARGE_V_FOLLOWEES_TTL = Duration.ofMinutes(5);
+    private static final Duration LV_RECENT_TTL = Duration.ofMinutes(2);
     private static final int MAX_FEED_SIZE = 500;
     private static final int LARGE_ACCOUNT_THRESHOLD = 1000;
 
@@ -40,16 +45,19 @@ public class FeedService {
     private final RedisTemplate<String, PostDTO> postCacheTemplate;
     private final UserServiceClient userServiceClient;
     private final PostServiceClient postServiceClient;
+    private final Executor feedTaskExecutor;
 
     public FeedService(
             RedisTemplate<String, String> redisTemplate,
             @Qualifier("postCacheTemplate") RedisTemplate<String, PostDTO> postCacheTemplate,
             UserServiceClient userServiceClient,
-            PostServiceClient postServiceClient) {
+            PostServiceClient postServiceClient,
+            @Qualifier("feedTaskExecutor") Executor feedTaskExecutor) {
         this.redisTemplate = redisTemplate;
         this.postCacheTemplate = postCacheTemplate;
         this.userServiceClient = userServiceClient;
         this.postServiceClient = postServiceClient;
+        this.feedTaskExecutor = feedTaskExecutor;
     }
 
     /**
@@ -75,10 +83,57 @@ public class FeedService {
         List<Long> largeVIds = getLargeVFolloweeIdsCached(userId);
         Map<Long, PostDTO> largeVMap = new HashMap<>();
         if (!largeVIds.isEmpty()) {
-            // 取 size+1 条，方便后续 hasMore 判断
-            List<PostDTO> pulled = postServiceClient.getRecentPostsByAuthors(
-                new RecentPostsRequest(largeVIds, cursor, size + 1));
-            for (PostDTO dto : pulled) largeVMap.put(dto.getId(), dto);
+            List<Long> authorsToFetch = new ArrayList<>();
+
+            if (cursor == null) {
+                // 第一页：先查两级缓存（lv_recent + post cache），避免打穿 post-service
+                for (Long authorId : largeVIds) {
+                    String recentKey = LV_RECENT_KEY_PREFIX + authorId;
+                    String cachedIds = redisTemplate.opsForValue().get(recentKey);
+                    if (cachedIds != null && !cachedIds.isEmpty()) {
+                        List<Long> postIds = Arrays.stream(cachedIds.split(","))
+                            .map(Long::parseLong).collect(Collectors.toList());
+                        List<String> postKeys = postIds.stream()
+                            .map(id -> POST_CACHE_KEY_PREFIX + id).collect(Collectors.toList());
+                        List<PostDTO> dtos = postCacheTemplate.opsForValue().multiGet(postKeys);
+                        boolean fullHit = true;
+                        for (int i = 0; i < postIds.size(); i++) {
+                            if (dtos != null && dtos.get(i) != null) {
+                                largeVMap.put(postIds.get(i), dtos.get(i));
+                            } else {
+                                fullHit = false;
+                            }
+                        }
+                        if (!fullHit) authorsToFetch.add(authorId); // post cache 部分失效，重拉
+                    } else {
+                        authorsToFetch.add(authorId); // lv_recent 未命中
+                    }
+                }
+            } else {
+                // 第二页及以后：游标使缓存失效逻辑复杂，直接走 post-service
+                authorsToFetch.addAll(largeVIds);
+            }
+
+            if (!authorsToFetch.isEmpty()) {
+                List<PostDTO> pulled = postServiceClient.getRecentPostsByAuthors(
+                    new RecentPostsRequest(authorsToFetch, cursor, size + 1));
+                for (PostDTO dto : pulled) {
+                    largeVMap.put(dto.getId(), dto);
+                    // 回写 post cache，供后续命中
+                    postCacheTemplate.opsForValue().set(
+                        POST_CACHE_KEY_PREFIX + dto.getId(), dto, POST_CACHE_TTL);
+                }
+                // 仅第一页回写 lv_recent（有游标时不缓存，结果依赖 cursor 不稳定）
+                if (cursor == null) {
+                    pulled.stream()
+                        .collect(Collectors.groupingBy(
+                            PostDTO::getUserId,
+                            Collectors.mapping(dto -> String.valueOf(dto.getId()), Collectors.joining(","))))
+                        .forEach((authorId, ids) ->
+                            redisTemplate.opsForValue().set(
+                                LV_RECENT_KEY_PREFIX + authorId, ids, LV_RECENT_TTL));
+                }
+            }
         }
 
         // ── 3. Merge into unified (postId → score) map, sort by score desc ─
@@ -158,13 +213,32 @@ public class FeedService {
     /**
      * Fan-out: push postId into each follower's Redis ZSET feed.
      * Skips large accounts (LARGE_ACCOUNT_THRESHOLD+) — their followers pull instead.
-     * Also pre-warms the PostDTO cache so first reads after a new post are instant.
+     *
+     * Normal accounts: pre-warm post:{postId} cache (followers' ZSet reads will hit it).
+     * Large-V accounts: pre-warm post:{postId} AND invalidate lv_recent:{authorId},
+     *   so the next getFeed re-fetches the updated list including this new post.
      */
     public void fanOut(Long postId, Long authorId, long scoreMillis) {
         List<Long> followerIds = userServiceClient.getFollowerIds(authorId);
 
-        // Pre-warm post cache asynchronously — runs in parallel with ZSet writes below.
-        // Best-effort: failure only means a cache miss on first read, not a fanOut failure.
+        if (followerIds.size() >= LARGE_ACCOUNT_THRESHOLD) {
+            log.info("Skipping push fan-out for large account authorId={}, followers={}", authorId, followerIds.size());
+            // 大 V：预热 post cache + 使 lv_recent 失效，下次 getFeed 拉取最新列表
+            CompletableFuture.runAsync(() -> {
+                try {
+                    List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
+                    if (!dtos.isEmpty()) {
+                        postCacheTemplate.opsForValue().set(POST_CACHE_KEY_PREFIX + postId, dtos.get(0), POST_CACHE_TTL);
+                    }
+                    redisTemplate.delete(LV_RECENT_KEY_PREFIX + authorId);
+                } catch (Exception e) {
+                    log.warn("Large-V cache update failed for postId={}: {}", postId, e.getMessage());
+                }
+            }, feedTaskExecutor);
+            return;
+        }
+
+        // 普通账号：预热 post cache（follower 的 ZSet 里会有这个 postId，getFeed 会读缓存）
         CompletableFuture.runAsync(() -> {
             try {
                 List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
@@ -174,12 +248,7 @@ public class FeedService {
             } catch (Exception e) {
                 log.warn("Failed to pre-warm cache for postId={}: {}", postId, e.getMessage());
             }
-        });
-
-        if (followerIds.size() >= LARGE_ACCOUNT_THRESHOLD) {
-            log.info("Skipping push fan-out for large account authorId={}, followers={}", authorId, followerIds.size());
-            return;
-        }
+        }, feedTaskExecutor);
 
         // Pipeline: collapse N*2 round trips into 1
         String postIdStr = String.valueOf(postId);
@@ -236,7 +305,7 @@ public class FeedService {
         String cached = redisTemplate.opsForValue().get(key);
         if (cached != null) {
             if (cached.isEmpty()) return List.of();
-            return java.util.Arrays.stream(cached.split(","))
+            return Arrays.stream(cached.split(","))
                 .map(Long::parseLong)
                 .collect(Collectors.toList());
         }
