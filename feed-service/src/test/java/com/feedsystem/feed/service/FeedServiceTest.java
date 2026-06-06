@@ -42,7 +42,8 @@ class FeedServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        feedService = new FeedService(redisTemplate, postCacheTemplate, userServiceClient, postServiceClient);
+        feedService = new FeedService(
+            redisTemplate, postCacheTemplate, userServiceClient, postServiceClient, Runnable::run);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         lenient().when(redisTemplate.opsForValue()).thenReturn(stringValueOps);
         // 缓存默认 miss，走实际的 userServiceClient 调用
