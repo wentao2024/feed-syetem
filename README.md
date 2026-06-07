@@ -37,7 +37,29 @@ API Gateway :8080
               Redis
               RabbitMQ consumer
               getFeed / fanOut / backfill
+### Fan-out Flow
 
+```
+POST /api/posts
+       │
+       ├─ follower count < 1,000 (normal account)
+       │       └─ RabbitMQ → feed-service
+       │               └─ Redis Pipeline: ZADD feed:{followerId} score postId  (all followers)
+       │                                  ZREMRANGEBYRANK  (cap at 500 entries)
+       │               └─ async: pre-warm post:{postId} cache
+       │
+       └─ follower count ≥ 1,000 (large-V / influencer)
+               └─ skip push fan-out entirely
+               └─ async: pre-warm post:{postId} cache
+                         invalidate lv_recent:{authorId}
+
+GET /api/feed
+       │
+       ├─ push path  → ZREVRANGEBYSCORE feed:{userId}
+       ├─ pull path  → largev_followees:{userId} cache (5 min)
+       │                  └─ per large-V: lv_recent cache → post cache → post-service
+       └─ merge by score → cursor page → batch resolve PostDTOs
+```
 Infrastructure:
        Eureka Server :8761
        Redis :6379
@@ -106,6 +128,40 @@ GET /api/feed?size=20&cursor=<nextCursor>
 | `post:{postId}` | JSON String | Full `PostDTO` | 24 hours |
 | `largev_followees:{userId}` | String | Large account ids followed by this user | 5 minutes |
 | `lv_recent:{authorId}` | String | Recent post ids for a large account | 2 minutes |
+
+
+## Performance
+
+JMeter load test — 5 thread groups, serialized execution, 0% error rate.
+
+### GET /api/feed — 200 concurrent threads × 50 loops (10,000 requests)
+
+| Metric | Before (ForkJoinPool) | After (dedicated pool) | Delta |
+|--------|-----------------------|------------------------|-------|
+| avg    | 265 ms                | **10 ms**              | −96 % |
+| p50    | 184 ms                | 9 ms                   | −95 % |
+| p90    | 614 ms                | 23 ms                  | −96 % |
+| p95    | 2,081 ms              | **32 ms**              | −98 % |
+| max    | 5,179 ms              | 63 ms                  | −99 % |
+| TPS    | 235 req/s             | **948 req/s**          | +4×   |
+
+### Cold-start read (Redis FLUSHALL → 200 threads)
+
+| Metric | Before | After  | Delta |
+|--------|--------|--------|-------|
+| avg    | 163 ms | 14 ms  | −91 % |
+| p95    | 438 ms | 56 ms  | −87 % |
+
+### Post creation
+
+| Scenario                        | avg before | avg after | Delta |
+|---------------------------------|-----------|-----------|-------|
+| Normal account (fan-out push)   | 21 ms     | 16 ms     | −24 % |
+| Large-V (skip push)             | 13 ms     | **7 ms**  | −46 % |
+
+**Root cause of the improvement:** `CompletableFuture.runAsync` defaults to the JVM ForkJoinPool common pool. Under 200-thread concurrent reads, blocking HTTP + Redis calls in async cache warm-up tasks saturated the pool, queuing subsequent tasks and spiking p95 to 2,000 ms+. Switching to a dedicated `ThreadPoolTaskExecutor` (core 10 / max 50 / queue 500 / CallerRunsPolicy) isolated the I/O load and restored linear throughput.
+
+---
 
 ## Tech Stack
 
