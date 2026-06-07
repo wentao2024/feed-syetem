@@ -174,8 +174,7 @@ JMeter load test — 5 thread groups, serialized execution, 0% error rate.
 | ORM | MyBatis-Plus |
 | Cache | Redis 7, ZSet, Pipeline |
 | Messaging | RabbitMQ 3.12 |
-| Auth | JWT, jjwt |
-| Migration | Flyway |
+| Auth | JWT (jjwt 0.12.3), Gateway validates + forwards X-User-Id|
 | API Docs | SpringDoc OpenAPI |
 | Testing | JUnit 5, Mockito, Testcontainers |
 | Load Testing | Apache JMeter |
