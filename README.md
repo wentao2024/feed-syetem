@@ -60,7 +60,7 @@ GET /api/feed
        ├─ pull path  → largev_followees:{userId} cache (5 min)
        │                  └─ per large-V: lv_recent cache → post cache → post-service
        └─ merge by score → cursor page → batch resolve PostDTOs
-```
+
 Infrastructure:
        Eureka Server :8761
        Redis :6379
