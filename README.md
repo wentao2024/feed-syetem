@@ -37,6 +37,7 @@ API Gateway :8080
               Redis
               RabbitMQ consumer
               getFeed / fanOut / backfill
+```
 ### Fan-out Flow
 
 ```
