@@ -215,11 +215,7 @@ Then start the services:
 | Post Swagger | http://localhost:8082/swagger-ui.html |
 | Feed Swagger | http://localhost:8083/swagger-ui.html |
 
-RabbitMQ credentials:
 
-```text
-guest / guest
-```
 
 ## API Overview
 
