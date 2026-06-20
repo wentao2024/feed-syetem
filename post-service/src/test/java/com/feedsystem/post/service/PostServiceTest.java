@@ -61,7 +61,7 @@ class PostServiceTest {
         postService.likePost(1L, 2L);
 
         verify(likeMapper).insert(any(Like.class));
-        // 原子 SQL UPDATE，不再修改内存对象；验证 mapper 被正确调用
+        // Atomic SQL UPDATE; no in-memory mutation — verify the mapper is invoked correctly
         verify(postMapper).incrementLikeCount(1L);
     }
 
