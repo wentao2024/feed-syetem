@@ -79,14 +79,14 @@ public class FeedService {
             ? new ArrayList<>(zsetItems) : List.of();
 
         // ── 2. Large-V pull feed ──────────────────────────────────────────
-        // large-V followee 列表用 Redis 缓存 5 分钟，避免每次请求都查 DB。
+        // Large-V followee list is cached in Redis for 5 minutes to avoid hitting the DB on every request.
         List<Long> largeVIds = getLargeVFolloweeIdsCached(userId);
         Map<Long, PostDTO> largeVMap = new HashMap<>();
         if (!largeVIds.isEmpty()) {
             List<Long> authorsToFetch = new ArrayList<>();
 
             if (cursor == null) {
-                // 第一页：先查两级缓存（lv_recent + post cache），避免打穿 post-service
+                // First page: check two-level cache (lv_recent + post cache) before hitting post-service
                 for (Long authorId : largeVIds) {
                     String recentKey = LV_RECENT_KEY_PREFIX + authorId;
                     String cachedIds = redisTemplate.opsForValue().get(recentKey);
@@ -104,13 +104,13 @@ public class FeedService {
                                 fullHit = false;
                             }
                         }
-                        if (!fullHit) authorsToFetch.add(authorId); // post cache 部分失效，重拉
+                        if (!fullHit) authorsToFetch.add(authorId); // post cache partially stale, re-fetch
                     } else {
-                        authorsToFetch.add(authorId); // lv_recent 未命中
+                        authorsToFetch.add(authorId); // lv_recent cache miss
                     }
                 }
             } else {
-                // 第二页及以后：游标使缓存失效逻辑复杂，直接走 post-service
+                // Page 2+: cursor complicates cache invalidation logic, go directly to post-service
                 authorsToFetch.addAll(largeVIds);
             }
 
@@ -119,11 +119,11 @@ public class FeedService {
                     new RecentPostsRequest(authorsToFetch, cursor, size + 1));
                 for (PostDTO dto : pulled) {
                     largeVMap.put(dto.getId(), dto);
-                    // 回写 post cache，供后续命中
+                    // Write back to post cache for subsequent hits
                     postCacheTemplate.opsForValue().set(
                         POST_CACHE_KEY_PREFIX + dto.getId(), dto, POST_CACHE_TTL);
                 }
-                // 仅第一页回写 lv_recent（有游标时不缓存，结果依赖 cursor 不稳定）
+                // Only write back lv_recent on the first page (cursor-based results are unstable to cache)
                 if (cursor == null) {
                     pulled.stream()
                         .collect(Collectors.groupingBy(
@@ -223,7 +223,7 @@ public class FeedService {
 
         if (followerIds.size() >= LARGE_ACCOUNT_THRESHOLD) {
             log.info("Skipping push fan-out for large account authorId={}, followers={}", authorId, followerIds.size());
-            // 大 V：预热 post cache + 使 lv_recent 失效，下次 getFeed 拉取最新列表
+            // Large-V: pre-warm post cache + invalidate lv_recent so the next getFeed fetches the latest list
             CompletableFuture.runAsync(() -> {
                 try {
                     List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
@@ -238,7 +238,7 @@ public class FeedService {
             return;
         }
 
-        // 普通账号：预热 post cache（follower 的 ZSet 里会有这个 postId，getFeed 会读缓存）
+        // Normal account: pre-warm post cache (followers' ZSets hold this postId; getFeed will read from cache)
         CompletableFuture.runAsync(() -> {
             try {
                 List<PostDTO> dtos = postServiceClient.getPostsByIds(List.of(postId));
@@ -268,10 +268,10 @@ public class FeedService {
     }
 
     /**
-     * 关注时回填：从 post-service 查询 followee 自己发的最近 20 条帖子，
-     * 写入 follower 的 feed ZSet。
-     * 原来的实现读的是 feed:{followeeId}（followee 看到的个性化 Feed），
-     * 会把 followee 关注的人的帖子也复制过来，逻辑错误。
+     * Backfill on follow: fetches the followee's own 20 most recent posts from post-service
+     * and writes them into the follower's feed ZSet.
+     * The previous implementation read feed:{followeeId} (the followee's personalized feed),
+     * which incorrectly copied posts from people the followee follows.
      */
     public void backfillOnFollow(Long followerId, Long followeeId) {
         List<PostDTO> recentPosts = postServiceClient.getRecentPostsByAuthors(
@@ -297,8 +297,8 @@ public class FeedService {
     }
 
     /**
-     * 从 Redis 缓存读取用户关注的大 V 列表，缓存 5 分钟。
-     * 避免每次 getFeed 都触发 DB GROUP BY 聚合查询。
+     * Reads the user's large-V followee list from Redis cache (TTL 5 minutes).
+     * Prevents a DB GROUP BY aggregation query on every getFeed call.
      */
     private List<Long> getLargeVFolloweeIdsCached(Long userId) {
         String key = LARGE_V_FOLLOWEES_KEY_PREFIX + userId;
