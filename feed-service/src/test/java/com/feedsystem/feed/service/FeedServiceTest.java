@@ -46,7 +46,7 @@ class FeedServiceTest {
             redisTemplate, postCacheTemplate, userServiceClient, postServiceClient, Runnable::run);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         lenient().when(redisTemplate.opsForValue()).thenReturn(stringValueOps);
-        // 缓存默认 miss，走实际的 userServiceClient 调用
+        // Cache defaults to miss, falling through to the actual userServiceClient call
         lenient().when(stringValueOps.get(anyString())).thenReturn(null);
         lenient().when(postCacheTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(postServiceClient.getPostsByIds(any())).thenReturn(List.of());
