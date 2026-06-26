@@ -18,6 +18,7 @@ COPY common/src      common/src
 COPY post-service/src post-service/src
 RUN mvn package -pl post-service -am -DskipTests --no-transfer-progress
 
+
 # ── Stage 2: Run ─────────────────────────────────────────────────────────────
 FROM amazoncorretto:17-alpine
 WORKDIR /app
