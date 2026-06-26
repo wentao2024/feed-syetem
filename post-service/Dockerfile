@@ -2,6 +2,7 @@
 FROM maven:3.9-amazoncorretto-17-alpine AS builder
 WORKDIR /build
 
+
 COPY pom.xml                pom.xml
 COPY common/pom.xml         common/pom.xml
 COPY eureka-server/pom.xml  eureka-server/pom.xml
@@ -9,6 +10,7 @@ COPY api-gateway/pom.xml    api-gateway/pom.xml
 COPY user-service/pom.xml   user-service/pom.xml
 COPY post-service/pom.xml   post-service/pom.xml
 COPY feed-service/pom.xml   feed-service/pom.xml
+
 
 RUN mvn dependency:go-offline -pl post-service -am --no-transfer-progress
 
