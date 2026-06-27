@@ -5,7 +5,6 @@ version: '3.8'
 # Stop: docker-compose down
 # Reset everything: docker-compose down -v
 
-
 services:
 
   # ─── Infrastructure ──────────────────────────────────────────────────────────
@@ -26,7 +25,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
 
   postgres-post:
     image: postgres:15-alpine
