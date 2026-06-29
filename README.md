@@ -1,5 +1,6 @@
 # Feed System
 
+
 A high-performance personalized feed backend built with Spring Boot microservices. The system simulates a Twitter/Instagram-style home timeline and focuses on core backend challenges such as fan-out write amplification, cursor pagination, Redis caching, large-account handling, asynchronous messaging, and load-test-driven optimization.
 
 ## Highlights
