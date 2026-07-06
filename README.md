@@ -15,6 +15,7 @@ A high-performance personalized feed backend built with Spring Boot microservice
 
 ## Architecture
 
+
 ```text
 Client / Frontend
        |
