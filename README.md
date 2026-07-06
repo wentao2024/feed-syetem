@@ -5,6 +5,7 @@ A high-performance personalized feed backend built with Spring Boot microservice
 
 ## Highlights
 
+
 - **Hybrid Push/Pull Feed Architecture**: normal users are pushed into followers' timelines, while large accounts skip push and are pulled during feed reads.
 - **Redis ZSet Timeline**: each user's timeline is stored as `feed:{userId}`, where the member is `postId` and the score is the post timestamp.
 - **Cursor-Based Pagination**: timestamp-based cursor pagination avoids duplicate or missing items caused by offset pagination on dynamic feeds.
