@@ -1,6 +1,5 @@
 package com.feedsystem.feed.client;
 
-
 import com.feedsystem.common.dto.PostDTO;
 import com.feedsystem.common.dto.RecentPostsRequest;
 import lombok.extern.slf4j.Slf4j;
