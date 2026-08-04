@@ -9,7 +9,6 @@ import java.util.List;
 @FeignClient(name = "user-service", fallback = UserServiceClientFallback.class)
 public interface UserServiceClient {
 
-    
     @GetMapping("/internal/users/{userId}/follower-ids")
     List<Long> getFollowerIds(@PathVariable Long userId);
 
