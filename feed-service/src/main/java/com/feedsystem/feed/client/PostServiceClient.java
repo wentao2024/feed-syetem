@@ -1,5 +1,6 @@
 package com.feedsystem.feed.client;
 
+
 import com.feedsystem.common.dto.PostDTO;
 import com.feedsystem.common.dto.RecentPostsRequest;
 import org.springframework.cloud.openfeign.FeignClient;
