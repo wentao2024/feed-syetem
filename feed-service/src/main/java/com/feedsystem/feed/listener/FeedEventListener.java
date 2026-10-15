@@ -1,6 +1,5 @@
 package com.feedsystem.feed.listener;
 
-
 import com.feedsystem.common.event.FollowEvent;
 import com.feedsystem.common.event.PostCreatedEvent;
 import com.feedsystem.feed.config.RabbitMQConfig;
